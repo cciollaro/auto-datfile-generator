@@ -1,206 +1,201 @@
 import os
-import re
-import xml.etree.ElementTree as ET
+import time
 import zipfile
-from time import sleep
-
+import shutil
 from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-regex = {
-    "date" : r"[0-9]{8}-[0-9]{6}",
-    "name" : r"(.*?.)( \([0-9]{8}-[0-9]{6}\).dat)"
+# Define the systems we want to scrape (Name: ID)
+# IDs sourced from Dat-O-Matic
+SYSTEMS = {
+    "Nintendo - Nintendo Entertainment System": "45",
+    "Nintendo - Super Nintendo Entertainment System": "49",
+    "Nintendo - Nintendo 64": "24",
+    "Nintendo - Game Boy": "39",
+    "Nintendo - Game Boy Color": "57",
+    "Nintendo - Game Boy Advance": "23",
+    "Nintendo - GameCube": "28"
 }
 
-no_intro_type = {
-    "standard"     : "standard",
-    "parent-clone" : "xml"
-}
-
-for key, value in no_intro_type.items():
-
-    # Download no-intro pack using selenium
+def main():
     dir_path = os.path.dirname(os.path.realpath(__file__))
-
+    
+    # Configure Firefox
     options = webdriver.FirefoxOptions()
     options.set_preference("browser.download.folderList", 2)
     options.set_preference("browser.download.manager.showWhenStarting", False)
     options.set_preference("browser.download.dir", dir_path)
-    options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/zip")
-    options.add_argument  ("-headless")
+    options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/zip, text/xml, application/xml, text/plain")
+    options.add_argument("-headless") 
 
-    service = webdriver.FirefoxService(log_output = "firefox-webdriver.log" , service_args = ["--log", "debug"])
-
+    service = webdriver.FirefoxService(log_output="firefox-webdriver.log", service_args=["--log", "debug"])
     driver = webdriver.Firefox(service=service, options=options)
-    driver.implicitly_wait(10)
+    wait = WebDriverWait(driver, 30)
 
-    # load website
-    driver.get("https://datomatic.no-intro.org")
-    print("Loaded no-intro datomatic ...")
+    downloaded_files = []
 
-    # select "DOWNLOAD"
-    driver.find_element(by="xpath", value="/html/body/div/header/nav/ul/li[3]/a").click()
+    try:
+        print("Starting Custom DAT Scraper...")
 
-    # select "daily"
-    driver.find_element(by="xpath", value="/html/body/div/section/article/table[1]/tbody/tr/td/a[5]").click()
+        for sys_name, sys_id in SYSTEMS.items():
+            print(f"Processing: {sys_name} (ID: {sys_id})")
+            
+            # Navigate to Standard DAT page for this system
+            url = f"https://datomatic.no-intro.org/index.php?page=download&s={sys_id}&op=dat"
+            driver.get(url)
+            
+            # Wait for form to load
+            try:
+                # Wait for the "Prepare" button
+                wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='submit' and @value='Prepare']")))
+            except:
+                print(f"  - Failed to load form for {sys_name}. Skipping.")
+                continue
 
-    #set the type of dat file
-    if key == "standard" :
-        driver.find_element(by="xpath", value="//input[@name='dat_type' and @value='dat']").click()
-    if key == "parent-clone" :
-        driver.find_element(by="xpath", value="//input[@name='dat_type' and @value='pc']").click()
-    print(f"Set dat type to {key} ...")
+            # --- Apply Settings ---
+            
+            # 1. Aftermarket (Life span) -> lifespan_2
+            try:
+                am_box = driver.find_element(By.NAME, "lifespan_2")
+                if not am_box.is_selected():
+                    am_box.click()
+                    print("  - Enabled Aftermarket")
+            except Exception as e:
+                print(f"  - Warning: Aftermarket checkbox not found or error: {e}")
 
-    # select "Request"
-    if key == "standard" :
-        # Enable Aftermarket (Life span)
-        try:
-            am_box = driver.find_element(by="xpath", value="//input[@name='life_span' and @value='aftermarket']")
-            if not am_box.is_selected():
-                am_box.click()
-                print("Enabled Aftermarket ...")
-        except Exception as e:
-            print(f"Warning: Could not enable Aftermarket: {e}")
+            # 2. MIA ROMs -> inc_mia value="2" (tagged)
+            try:
+                mia_tagged = driver.find_element(By.XPATH, "//input[@name='inc_mia' and @value='2']")
+                if not mia_tagged.is_selected():
+                    mia_tagged.click()
+                    print("  - Enabled MIA (Tagged)")
+            except Exception as e:
+                # Fallback: some forms might not have MIA options or different layout?
+                print(f"  - Warning: MIA Tagged option not found: {e}")
 
-        # Enable MIA (Tagged)
-        try:
-            mia_box = driver.find_element(by="xpath", value="//input[@name='mia' and @value='tagged']")
-            mia_box.click()
-            print("Enabled MIA Tagged ...")
-        except Exception as e:
-            print(f"Warning: Could not enable MIA Tagged: {e}")
-
-        driver.find_element(by="xpath", value="/html/body/div[1]/section/article/div/form/input[5]").click()
-    if key == "parent-clone" :
-        driver.find_element(by="xpath", value="/html/body/div[1]/section/article/div/form/input[4]").click()
-    sleep(5)
-
-    # select "Download"
-    driver.find_element(by="xpath", value="/html/body/div[1]/section/article/div/form/input").click()
-    print("Waiting for download to complete ...")
-
-    # wait until file is found
-    FOUND = False
-    NAME = None
-    TIME_SLEPT = 0
-    while not FOUND:
-        if TIME_SLEPT > 900:
-            raise FileNotFoundError(f"No-Intro {key} zip file not found, timeout reached")
-
-        for f in os.listdir(dir_path):
-            if "No-Intro Love Pack" in f and not f.endswith(".part"):
+            # 3. Format -> Headered (value="0") ONLY for NES
+            # Note: For other systems, we generally want default (Headerless/No plugin) or whatever is standard.
+            # Myrient standardizes on Headered for NES.
+            if "Nintendo Entertainment System" in sys_name and "Super" not in sys_name:
                 try:
-                    zipfile.ZipFile(os.path.join(dir_path, f))
-                    NAME = f
-                    FOUND = True
-                    print("No-Intro zip file download completed ...")
-                    break
-                except zipfile.BadZipfile:
+                    headered = driver.find_element(By.XPATH, "//input[@name='format' and @value='0']")
+                    if not headered.is_selected():
+                        headered.click()
+                        print("  - Set Format: Headered")
+                except:
                     pass
-        # wait 5 seconds and check for download completion again
-        sleep(5)
-        TIME_SLEPT += 5
 
-    if NAME is None:
-        raise FileNotFoundError(f"No-Intro {key} zip file not found, download failed")
+            # --- Download ---
+            
+            # Click "Prepare"
+            try:
+                prepare_btn = driver.find_element(By.XPATH, "//input[@type='submit' and @value='Prepare']")
+                prepare_btn.click()
+                print("  - Request submitted...")
+            except Exception as e:
+                print(f"  - Failed to click download button: {e}")
+                continue
 
-    #setup archive path and rename
-    archive_name = "no-intro.zip" if key == "standard" else f"no-intro_{key}.zip"
-    archive_full = os.path.join(dir_path, archive_name)
-    os.rename(os.path.join(dir_path, NAME), os.path.join(dir_path, archive_full))
+            # Wait for the download button (sometimes it changes to a "Download" button after Prepare?)
+            # Observe behavior: "Prepare" usually POSTs and triggers a download OR shows a "Download" button on next page.
+            # Let's assume it might lead to a secondary page OR trigger download.
+            # no-intro.py logic suggested a click, then wait.
+            # In "Standard DAT" mode on the site: Clicking "Prepare" usually downloads the file directly or reloads page with "Download".
+            # The HTML shows `action=""`, so it posts to self.
+            # Let's wait and see if a file appears.
+            
+            # Better strategy: Wait for a new button "Download" if "Prepare" was just a generator.
+            # But commonly on Dat-O-Matic, "Prepare" triggers the generation and serves the file.
+            
+            # Wait for file arrival
+            found_new_file = False
+            start_time = time.time()
+            initial_files = set(os.listdir(dir_path))
+            
+            # If "Prepare" redirects to a "Download" button page:
+            try:
+                # Check if a "Download" button appeared (Value="Download")
+                # wait.until(EC.presence_of_element_located((By.XPATH, "//input[@value='Download']")))
+                # If so, click it.
+                # But let's try just waiting for file first.
+                pass
+            except:
+                pass
 
-    # load & extract zip file, there is currently no way to remove files from zip archive
-    with zipfile.ZipFile(os.path.join(dir_path, archive_full), mode="r") as orig_archive:
-        orig_archive.extractall()
-        # delete unneeded files
-        os.remove("index.txt")
+            while time.time() - start_time < 30: # 30s timeout
+                current_files = set(os.listdir(dir_path))
+                new_files = current_files - initial_files
+                
+                for f in new_files:
+                    if f.endswith(".dat") or f.endswith(".zip") and not f.endswith(".part"):
+                        # Found it!
+                        print(f"  - Downloaded: {f}")
+                        downloaded_files.append(f)
+                        found_new_file = True
+                        break
+                if found_new_file:
+                    break
+                time.sleep(1)
+            
+            if not found_new_file:
+                 # Check if we are on a "Download" page
+                try:
+                    download_btn = driver.find_element(By.XPATH, "//input[@value='Download']")
+                    download_btn.click()
+                    print("  - Clicked secondary Download button...")
+                    # Wait again
+                    start_time = time.time()
+                    while time.time() - start_time < 30:
+                        current_files = set(os.listdir(dir_path))
+                        new_files = current_files - initial_files
+                        for f in new_files:
+                            if not f.endswith(".part") and (f.endswith(".dat") or f.endswith(".zip")):
+                                print(f"  - Downloaded: {f}")
+                                downloaded_files.append(f)
+                                found_new_file = True
+                                break
+                        if found_new_file: break
+                        time.sleep(1)
+                except:
+                    print("  - No file received.")
 
-    print("Building new archive ...")
-    with zipfile.ZipFile(os.path.join(dir_path, archive_full), mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for f in os.listdir(dir_path):
-            if "No-Intro" in f:
-                print("\nAdding No-Intro dats ...")
-                os.chdir("./No-Intro")
-                for x in os.listdir(path="."):
-                    if x.endswith(".dat"):
-                        print("Adding to Archive: ", x)
-                        archive.write(x)
-                        os.remove(x)
-                os.chdir("../")
-                os.rmdir("./No-Intro")
-            if "Non-Redump" in f:
-                print("\nAdding No-Intro Non-Redump dats ...")
-                os.chdir("./Non-Redump")
-                for x in os.listdir(path="."):
-                    if x.endswith(".dat"):
-                        print("Adding to Archive: ", x)
-                        archive.write(x)
-                        os.remove(x)
-                os.chdir("../")
-                os.rmdir("./Non-Redump")
-            if "Source Code" in f:
-                print("\nAdding No-Intro Source Code dats ...")
-                os.chdir("./Source Code")
-                for x in os.listdir(path="."):
-                    if x.endswith(".dat"):
-                        print("Adding to Archive: ", x)
-                        archive.write(x)
-                        os.remove(x)
-                os.chdir("../")
-                os.rmdir("./Source Code")
-            if "Unofficial" in f:
-                print("\nAdding No-Intro Unofficial dats ...")
-                os.chdir("./Unofficial")
-                for x in os.listdir(path="."):
-                    if x.endswith(".dat"):
-                        print("Adding to Archive: ", x)
-                        archive.write(x)
-                        os.remove(x)
-                os.chdir("../")
-                os.rmdir("./Unofficial")
+            time.sleep(2) # Cooldown
 
-    print("\nCreating new clrmamepro datfile ...\n")
-    # clrmamepro XML file
-    tag_clrmamepro = ET.Element("clrmamepro")
-    for dat in archive.namelist():
-        print(dat)
-        # section for this dat in the XML file
-        tag_datfile = ET.SubElement(tag_clrmamepro, "datfile")
+    except Exception as e:
+        print(f"Global Error: {e}")
+    finally:
+        driver.quit()
 
-        # XML version
-        dat_date = re.findall(regex["date"], dat)[0]
-        ET.SubElement(tag_datfile, "version").text = dat_date
-        print(dat_date)
+    # Create the final archive: no-intro.zip
+    print("\nPackage Creation...")
+    archive_name = "no-intro.zip"
+    archive_path = os.path.join(dir_path, archive_name)
+    
+    with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for f in downloaded_files:
+            file_path = os.path.join(dir_path, f)
+            # If it's a dat, add it. If it's a zip, extract valid dats?
+            # Dat-O-Matic standard download usually gives a .zip containing the .dat
+            if f.endswith(".zip"):
+                try:
+                    with zipfile.ZipFile(file_path, 'r') as subzip:
+                        for name in subzip.namelist():
+                            if name.endswith(".dat"):
+                                content = subzip.read(name)
+                                zf.writestr(name, content)
+                                print(f"  - Added {name} from {f}")
+                except Exception as e:
+                    print(f"Error reading {f}: {e}")
+            elif f.endswith(".dat"):
+                zf.write(file_path, arcname=f)
+                print(f"  - Added {f}")
+            
+            # Cleanup source file
+            # os.remove(file_path) # Optional: keep for debug? Action runner cleans up.
 
-        # XML name & description
-        temp_name = re.findall(regex["name"], dat)[0][0]
-        ET.SubElement(tag_datfile, "name").text = temp_name
-        ET.SubElement(tag_datfile, "description").text = temp_name
-        print(temp_name)
+    print(f"\nFinal Archive Created: {archive_path}")
 
-        # URL tag in XML
-        ET.SubElement(tag_datfile, "url").text = f"https://github.com/hugo19941994/auto-datfile-generator/releases/latest/download/{archive_name}"
-
-        # File tag in XML
-        file_name = dat
-        file_name = f"{file_name[:-4]}.dat"
-        ET.SubElement(tag_datfile, "file").text = file_name
-        print(file_name)
-
-        # Author tag in XML
-        ET.SubElement(tag_datfile, "author").text = "no-intro.org"
-
-        # Command XML tag
-        ET.SubElement(tag_datfile, "comment").text = "_"
-
-        print("\n")
-
-    archive.close()
-
-    # store clrmamepro XML file
-    xml_data = ET.tostring(tag_clrmamepro).decode()
-    xml_filename = "no-intro.xml" if key == "standard" else f"no-intro_{key}.xml"
-
-    with open(xml_filename, "w", encoding="utf-8") as xmlfile:
-        xmlfile.write(xml_data)
-
-    print("Finished")
+if __name__ == "__main__":
+    main()
