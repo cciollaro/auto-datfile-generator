@@ -52,6 +52,23 @@ for key, value in no_intro_type.items():
 
     # select "Request"
     if key == "standard" :
+        # Enable Aftermarket (Life span)
+        try:
+            am_box = driver.find_element(by="xpath", value="//input[@name='life_span' and @value='aftermarket']")
+            if not am_box.is_selected():
+                am_box.click()
+                print("Enabled Aftermarket ...")
+        except Exception as e:
+            print(f"Warning: Could not enable Aftermarket: {e}")
+
+        # Enable MIA (Tagged)
+        try:
+            mia_box = driver.find_element(by="xpath", value="//input[@name='mia' and @value='tagged']")
+            mia_box.click()
+            print("Enabled MIA Tagged ...")
+        except Exception as e:
+            print(f"Warning: Could not enable MIA Tagged: {e}")
+
         driver.find_element(by="xpath", value="/html/body/div[1]/section/article/div/form/input[5]").click()
     if key == "parent-clone" :
         driver.find_element(by="xpath", value="/html/body/div[1]/section/article/div/form/input[4]").click()
