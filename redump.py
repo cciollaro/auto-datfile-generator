@@ -30,6 +30,10 @@ def _find_dats():
 
 def update_XML():
     dat_list = _find_dats()
+    
+    # Whitelist
+    whitelist = ["gc", "gc-bios"]
+    dat_list = [d for d in dat_list if d in whitelist]
 
     # zip file to store all DAT files
     zip_object = zipfile.ZipFile("redump.zip", "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9)
