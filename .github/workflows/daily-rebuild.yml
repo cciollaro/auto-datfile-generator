@@ -53,8 +53,8 @@ jobs:
           allowUpdates: true
           artifacts: "*.xml,*.zip"
           commit: master
-          name: Daily_Rebuild
+          name: Weekly_Rebuild
           makeLatest: true
-          tag: Daily_Rebuild
+          tag: Weekly_Rebuild
           token: ${{ secrets.GITHUB_TOKEN }}
           body: "Automatically released by github actions"
