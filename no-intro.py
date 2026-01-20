@@ -15,8 +15,7 @@ SYSTEMS = {
     "Nintendo - Nintendo 64": "24",
     "Nintendo - Game Boy": "39",
     "Nintendo - Game Boy Color": "57",
-    "Nintendo - Game Boy Advance": "23",
-    "Nintendo - GameCube": "28"
+    "Nintendo - Game Boy Advance": "23"
 }
 
 def main():
